@@ -1,0 +1,17 @@
+*.o
+*.a
+*.so
+*.out
+*.pyc
+*.dylib
+*.dSYM/
+
+*.swp
+*.swo
+*.orig
+*.un~
+*.DS_Store
+
+tags
+
+t/servroot

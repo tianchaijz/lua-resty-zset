@@ -19,7 +19,7 @@ local _mt = { __index = _M }
 
 function _M.new(size)
     local zset = {
-        _sl = skiplist.new(size),
+        _sl = skiplist.new(),
         _dict = table_new(0, size or 1),
     }
 
@@ -85,8 +85,23 @@ end
 
 
 -- return value and score
+function _M.head(self)
+    return self._sl:head()
+end
+
+
+-- return value and score
+function _M.tail(self)
+    return self._sl:tail()
+end
+
+
+-- return value and score
 function _M.at_rank(self, rank)
-    return self._sl:at_rank(rank)
+    local x = self._sl:get_node_by_rank(rank)
+    if x then
+        return x.value, x.score
+    end
 end
 
 
@@ -105,17 +120,18 @@ function _M.reverse_rank(self, rank)
 end
 
 
--- remove [from, to]
-local function remove_helper(self, from, to, cb)
+-- remove [s, e]
+local function remove_helper(self, s, e, cb)
     local dict = self._dict
-    local delete_cb = function(value, score)
-        dict[value] = nil
+    local delete_cb = function(x)
+        local v = x.value
+        dict[v] = nil
         if cb then
-            cb(value, score)
+            cb(v, x.score)
         end
     end
 
-    return self._sl:delete_range_by_rank(from, to, delete_cb)
+    return self._sl:delete_range_by_rank(s, e, delete_cb)
 end
 
 
@@ -169,10 +185,11 @@ end
 
 function _M.remove_range(self, minscore, minex, maxscore, maxex, cb)
     local dict = self._dict
-    local delete_cb = function(value, score)
-        dict[value] = nil
+    local delete_cb = function(x)
+        local v = x.value
+        dict[v] = nil
         if cb then
-            cb(value, score)
+            cb(v, x.score)
         end
     end
 
@@ -197,63 +214,59 @@ function _M.limit_back(self, n, cb)
         return 0
     end
 
-    local to = len - n
+    local e = len - n
 
-    return remove_helper(self, 1, to, cb)
+    return remove_helper(self, 1, e, cb)
 end
 
 
 -- 1-based rank, inclusive
-function _M.iterate_range_by_rank(self, from, to, cb)
+function _M.iterate_range_by_rank(self, s, e, cb)
     local sl = self._sl
     local len = sl:len()
 
-    from = from or len
-    to = to or len
+    s = s or len
+    e = e or len
 
-    local reverse = from > to
-    local span = reverse and (from - to + 1) or (to - from + 1)
+    local reverse = s > e
+    local span = reverse and (s - e + 1) or (e - s + 1)
 
-    local x = sl:get_node_by_rank(from)
+    local x = sl:get_node_by_rank(s)
     local n = 0
-    local value
     while x and n < span do
         n = n + 1
-        value = sl:node2value(x)
-        cb(value, x.score)
+        cb(x.value, x.score)
         if reverse then
             x = x.backward
         else
-            x = x.level[0].forward
+            x = x.level[1].forward
         end
     end
 end
 
 
 -- default inclusive
-function _M.iterate_range_by_score(self, from, fromex, to, toex, cb)
+function _M.iterate_range_by_score(self, s, sex, e, eex, cb)
     local sl = self._sl
 
     local x
-    local reverse = from > to
+    local reverse = s > e
     if reverse then
-        x = sl:last_in_range(to, toex, from, fromex)
+        x = sl:last_in_range(e, eex, s, sex)
     else
-        x = sl:first_in_range(from, fromex, to, toex)
+        x = sl:first_in_range(s, sex, e, eex)
     end
 
-    local value
     while x do
-        value = sl:node2value(x)
-        cb(value, x.score)
+        cb(x.value, x.score)
         if reverse then
             x = x.backward
-            if not x or lt_in(x.score, to, toex) then
+            if not x or lt_in(x.score, e, eex) then
                 return
             end
         else
-            x = x.level[0].forward
-            if not x or lt_in(to, x.score, toex) then
+            x = x.level[1].forward
+            if not x or lt_in(e, x.score, eex) then
                 return
             end
         end
@@ -261,8 +274,8 @@ function _M.iterate_range_by_score(self, from, fromex, to, toex, cb)
 end
 
 
-local function print_node(value, score, rank)
-    print(string_format("(%d, %f, %s)", rank, score, tostring(value)))
+local function print_node(x, rank)
+    print(string_format("(%d, %f, %s)", rank, x.score, tostring(x.value)))
 end
 
 

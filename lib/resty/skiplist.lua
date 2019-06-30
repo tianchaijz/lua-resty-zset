@@ -2,16 +2,8 @@
 -- Ported from Redis skiplist C implementation.
 
 
-local ffi = require "ffi"
 local math = require "math"
 
-local ffi_gc = ffi.gc
-local ffi_new = ffi.new
-local ffi_fill = ffi.fill
-local ffi_cast = ffi.cast
-local ffi_sizeof = ffi.sizeof
-
-local tonumber = tonumber
 local setmetatable = setmetatable
 local random = math.random
 local table_new
@@ -26,87 +18,12 @@ do
 end
 
 
-ffi.cdef[[
-typedef struct skiplist_node_level_s skiplist_node_level_t;
-typedef struct skiplist_node_s skiplist_node_t;
-typedef struct skiplist_s skiplist_t;
-
-
-struct skiplist_node_level_s {
-    skiplist_node_t         *forward;
-    int                      span;
-};
-
-struct skiplist_node_s {
-    int                      ref;
-    double                   score;
-    skiplist_node_t         *backward;
-    skiplist_node_level_t   *level;
-};
-
-struct skiplist_s {
-    skiplist_node_t         *header;
-    skiplist_node_t         *tail;
-    int                      level;
-    int                      length;
-};
-]]
-
-
-local NULL = ffi_new("void*", nil)
-local int_arr_t = ffi.typeof("int[?]")
-local uintptr_t = ffi.typeof("uintptr_t")
-local skiplist_t = ffi.typeof("skiplist_t")
-local skiplist_node_t = ffi.typeof("skiplist_node_t[1]")
-local skiplist_node_ptr_t = ffi.typeof("skiplist_node_t*")
-local skiplist_node_ptr_arr_t = ffi.typeof("skiplist_node_t*[?]")
-local skiplist_node_level_arr_t = ffi.typeof("skiplist_node_level_t[?]")
-
 local _skiplist_max_level = 32
 local _skiplist_p = 0.25
-local _skiplist_header_level_size =
-    ffi_sizeof(skiplist_node_level_arr_t, _skiplist_max_level)
-
-
-local _registry = {}
-local _ref_free = 0
-local _ref_nil = -1
 
 
 local _M = {}
 local _mt = { __index = _M }
-
-
-local function doref(obj)
-    if obj == nil then
-        return _ref_nil
-    end
-
-    local ref = _registry[_ref_free]
-    if ref and ref ~= 0 then
-        _registry[_ref_free] = _registry[ref]
-    else
-        ref = #_registry + 1
-    end
-
-    _registry[ref] = obj
-
-    return ref
-end
-
-
-local function unref(ref)
-    -- print("unref: ", ref)
-    if ref > 0 then
-        _registry[ref] = _registry[_ref_free]
-        _registry[_ref_free] = ref
-    end
-end
-
-
-local function ptr2num(ptr)
-    return tonumber(ffi_cast(uintptr_t, ptr))
-end
 
 
 local function lt_in(lhs, rhs, inclusive)
@@ -138,34 +55,57 @@ local function random_level()
 end
 
 
-local function new_node(level)
-    local node = ffi_new(skiplist_node_t)
-    local lvl = ffi_new(skiplist_node_level_arr_t, level)
+--[[
+    struct skiplist_node_level_s {
+        skiplist_node_t         *forward;
+        int                      span;
+    };
 
-    node[0].ref = doref({ node, lvl })
-    node[0].level = lvl
+    struct skiplist_node_s {
+        void                    *obj;
+        double                   score;
+        skiplist_node_t         *backward;
+        skiplist_node_level_t   *level;
+    };
 
-    return ffi_new(skiplist_node_ptr_t, node)
+    struct skiplist_s {
+        skiplist_node_t         *header;
+        skiplist_node_t         *tail;
+        int                      level;
+        int                      length;
+    };
+]]
+
+
+local function new_node(level, score, value)
+    local lvl = table_new(level, 0)
+    for i = 1, level do
+        lvl[i] = { forward = nil, span = 0 }
+    end
+
+    local node = {
+        value = value,
+        score = score,
+        backward = nil,
+        level = lvl,
+    }
+
+    return node
 end
 
 
-local function free_skiplist(sl)
-    -- print("free skiplist header: ", sl.header.ref)
-    unref(sl.header.ref)
-end
-
-
-function _M.new(size)
-    local sl = ffi_gc(ffi_new(skiplist_t), free_skiplist)
-
-    sl.header = new_node(_skiplist_max_level)
-    sl.level = 1
+function _M.new()
+    local sl = {
+        header = new_node(_skiplist_max_level, 0, nil),
+        tail = nil,
+        level = 1,
+        length = 0,
+    }
 
     local self = {
         _sl = sl,
-        _dict = table_new(0, size or 1),
-        _rank = ffi_new(int_arr_t, _skiplist_max_level),
-        _update = ffi_new(skiplist_node_ptr_arr_t, _skiplist_max_level),
+        _rank = table_new(_skiplist_max_level, 0),
+        _update = table_new(_skiplist_max_level, 0),
     }
 
     return setmetatable(self, _mt)
@@ -177,41 +117,20 @@ function _M.len(self)
 end
 
 
-function _M.clear(self)
-    local sl = self._sl
-
-    local header = sl.header
-
-    header.score = 0
-    header.backward = NULL
-    ffi_fill(header.level, _skiplist_header_level_size, 0)
-
-    sl.tail = NULL
-    sl.level = 1
-    sl.length = 0
-end
-
-
-function _M.node2value(self, node)
-    return self._dict[ptr2num(node)]
-end
-
-
 local function insert(self, score, value)
     local sl = self._sl
-    local dict = self._dict
     local rank = self._rank
     local update = self._update
 
     local x = sl.header
-    local l = sl.level - 1
-    for i = l, 0, -1 do
+    local l = sl.level
+    for i = l, 1, -1 do
         -- store rank that is crossed to reach the insert position
         rank[i] = i == l and 0 or rank[i + 1]
         local y = x.level[i]
         local z = y.forward
-        while z ~= NULL and (z.score < score or
-                (z.score == score and dict[ptr2num(z)] < value)) do
+        while z and (z.score < score or
+                (z.score == score and z.value < value)) do
             rank[i] = rank[i] + y.span
             x = z
             y = x.level[i]
@@ -222,7 +141,7 @@ local function insert(self, score, value)
 
     local level = random_level()
     if level > sl.level then
-        for i = sl.level, level - 1 do
+        for i = sl.level + 1, level do
             rank[i] = 0
             update[i] = sl.header
             update[i].level[i].span = sl.length
@@ -230,11 +149,9 @@ local function insert(self, score, value)
         sl.level = level
     end
 
-    x = new_node(level)
-    x.score = score
-    dict[ptr2num(x)] = value
+    x = new_node(level, score, value)
 
-    for i = 0, level - 1 do
+    for i = 1, level do
         local y = x.level[i]
         local z = update[i].level[i]
 
@@ -242,28 +159,28 @@ local function insert(self, score, value)
         z.forward = x
 
         -- update span covered by update[i] as x is inserted here
-        local span = rank[0] - rank[i]
+        local span = rank[1] - rank[i]
         y.span = z.span - span
         z.span = span + 1
     end
 
     -- increment span for untouched levels
-    for i = level, sl.level - 1 do
+    for i = level + 1, sl.level do
         local y = update[i].level[i]
         y.span = y.span + 1
     end
 
-    if update[0] == sl.header then
-        x.backward = NULL
+    if update[1] == sl.header then
+        x.backward = nil
     else
-        x.backward = update[0]
+        x.backward = update[1]
     end
 
-    local y = x.level[0].forward
-    if y == NULL then
-        sl.tail = x
-    else
+    local y = x.level[1].forward
+    if y then
         y.backward = x
+    else
+        sl.tail = x
     end
 
     sl.length = sl.length + 1
@@ -273,8 +190,8 @@ end
 _M.insert = insert
 
 
-local function delete_node(self, sl, x, update)
-    for i = 0, sl.level - 1 do
+local function delete_node(sl, x, update)
+    for i = 1, sl.level do
         local y = x.level[i]
         local z = update[i].level[i]
         if z.forward == x then
@@ -285,36 +202,32 @@ local function delete_node(self, sl, x, update)
         end
     end
 
-    local y = x.level[0]
-    if y.forward == NULL then
-        sl.tail = x.backward
-    else
+    local y = x.level[1]
+    if y.forward then
         y.forward.backward = x.backward
+    else
+        sl.tail = x.backward
     end
 
     local lvl = sl.header.level
-    while sl.level > 1 and lvl[sl.level - 1].forward == NULL do
+    while sl.level > 1 and not lvl[sl.level].forward do
+        lvl[sl.level].span = 0
         sl.level = sl.level - 1
     end
 
     sl.length = sl.length - 1
-
-    -- free
-    self._dict[ptr2num(x)] = nil
-    unref(x.ref)
 end
 
 
 function _M.update(self, curscore, value, newscore)
     local sl = self._sl
-    local dict = self._dict
     local update = self._update
 
     local x = sl.header
-    for i = sl.level - 1, 0, -1 do
+    for i = sl.level, 1, -1 do
         local y = x.level[i].forward
-        while y ~= NULL and (y.score < curscore or
-                (y.score == curscore and dict[ptr2num(y)] < value)) do
+        while y and (y.score < curscore or
+                (y.score == curscore and y.value < value)) do
             x = y
             y = x.level[i].forward
         end
@@ -323,17 +236,17 @@ function _M.update(self, curscore, value, newscore)
 
     -- jump to our object: note that this function assumes that the
     -- object with the matching score exists
-    x = x.level[0].forward
+    x = x.level[1].forward
 
-    if (x.backward == NULL or x.backward.score < newscore) and
-            (x.level[0].forward == NULL or
-                    x.level[0].forward.score > newscore) then
+    if (not x.backward or x.backward.score < newscore) and
+            (not x.level[1].forward or
+                    x.level[1].forward.score > newscore) then
         x.score = newscore
         return x
     end
 
     -- no way to resuse the old one
-    delete_node(self, sl, x, update)
+    delete_node(sl, x, update)
 
     return insert(self, newscore, value)
 end
@@ -341,23 +254,22 @@ end
 
 local function delete(self, score, value)
     local sl = self._sl
-    local dict = self._dict
     local update = self._update
 
     local x = sl.header
-    for i = sl.level - 1, 0, -1 do
+    for i = sl.level, 1, -1 do
         local y = x.level[i].forward
-        while y ~= NULL and (y.score < score or
-                (y.score == score and dict[ptr2num(y)] < value)) do
+        while y and (y.score < score or
+                (y.score == score and y.value < value)) do
             x = y
             y = x.level[i].forward
         end
         update[i] = x
     end
 
-    x = x.level[0].forward
-    if x ~= NULL and dict[ptr2num(x)] == value then
-        delete_node(self, sl, x, update)
+    x = x.level[1].forward
+    if x and x.value == value then
+        delete_node(sl, x, update)
         return true
     end
 
@@ -366,13 +278,12 @@ end
 _M.delete = delete
 
 
--- delete [from, to], note that from and to need to be 1-based.
-function _M.delete_range_by_rank(self, from, to, cb)
+-- delete [s, e], note that s and e need to be 1-based.
+function _M.delete_range_by_rank(self, s, e, cb)
     local sl = self._sl
-    local dict = self._dict
     local update = self._update
 
-    if from > sl.length or to < 1 then
+    if s > sl.length or e < 1 then
         return 0
     end
 
@@ -380,9 +291,9 @@ function _M.delete_range_by_rank(self, from, to, cb)
     local traversed = 0
 
     local x = sl.header
-    for i = sl.level - 1, 0, -1 do
+    for i = sl.level, 1, -1 do
         local y = x.level[i]
-        while y.forward ~= NULL and (traversed + y.span < from) do
+        while y.forward and (traversed + y.span < s) do
             traversed = traversed + y.span
             x = y.forward
             y = x.level[i]
@@ -391,15 +302,13 @@ function _M.delete_range_by_rank(self, from, to, cb)
     end
 
     traversed = traversed + 1
-    x = x.level[0].forward
-    while x ~= NULL and traversed <= to do
-        local y = x.level[0].forward
-        local idx = ptr2num(x)
-        local value = dict[idx]
+    x = x.level[1].forward
+    while x and traversed <= e do
+        local y = x.level[1].forward
 
-        cb(value, x.score)
+        cb(x)
+        delete_node(sl, x, update)
 
-        delete_node(self, sl, x, update)
         removed = removed + 1
         traversed = traversed + 1
 
@@ -412,30 +321,27 @@ end
 
 function _M.delete_range_by_score(self, minscore, minex, maxscore, maxex, cb)
     local sl = self._sl
-    local dict = self._dict
     local update = self._update
 
     local removed = 0
 
     local x = sl.header
-    for i = sl.level - 1, 0, -1 do
+    for i = sl.level, 1, -1 do
         local y = x.level[i].forward
-        while y ~= NULL and lt_in(y.score, minscore, minex) do
+        while y and lt_in(y.score, minscore, minex) do
             x = y
             y = x.level[i].forward
         end
         update[i] = x
     end
 
-    x = x.level[0].forward
-    while x ~= NULL and lt_ex(x.score, maxscore, maxex) do
-        local y = x.level[0].forward
-        local idx = ptr2num(x)
-        local value = dict[idx]
+    x = x.level[1].forward
+    while x and lt_ex(x.score, maxscore, maxex) do
+        local y = x.level[1].forward
 
-        cb(value, x.score)
+        cb(x)
+        delete_node(sl, x, update)
 
-        delete_node(self, sl, x, update)
         removed = removed + 1
 
         x = y
@@ -445,12 +351,30 @@ function _M.delete_range_by_score(self, minscore, minex, maxscore, maxex, cb)
 end
 
 
+function _M.head(self)
+    local x = self._sl.header
+
+    x = x.level[1].forward
+    if x then
+        return x.value, x.score
+    end
+end
+
+
+function _M.tail(self)
+    local x = self._sl.tail
+    if x then
+        return x.value, x.score
+    end
+end
+
+
 function _M.pop_head(self)
     local x = self._sl.header
 
-    x = x.level[0].forward
-    if x ~= NULL then
-        local v = self._dict[ptr2num(x)]
+    x = x.level[1].forward
+    if x then
+        local v = x.value
         local score = x.score
         delete(self, score, v)
         return v, score
@@ -460,8 +384,8 @@ end
 
 function _M.pop_tail(self)
     local x = self._sl.tail
-    if x ~= NULL then
-        local v = self._dict[ptr2num(x)]
+    if x then
+        local v = x.value
         local score = x.score
         delete(self, score, v)
         return v, score
@@ -469,7 +393,7 @@ function _M.pop_tail(self)
 end
 
 
-local function get_node_by_rank(self, rank)
+function _M.get_node_by_rank(self, rank)
     local sl = self._sl
 
     if rank < 1 or rank > sl.length then
@@ -478,9 +402,9 @@ local function get_node_by_rank(self, rank)
 
     local traversed = 0
     local x = sl.header
-    for i = sl.level - 1, 0, -1 do
+    for i = sl.level, 1, -1 do
         local y = x.level[i]
-        while y.forward ~= NULL and (traversed + y.span <= rank) do
+        while y.forward and (traversed + y.span <= rank) do
             traversed = traversed + y.span
             x = y.forward
             y = x.level[i]
@@ -491,35 +415,25 @@ local function get_node_by_rank(self, rank)
         end
     end
 end
-_M.get_node_by_rank = get_node_by_rank
-
-
-function _M.at_rank(self, rank)
-    local x = get_node_by_rank(self, rank)
-    if x ~= NULL then
-        return self._dict[ptr2num(x)], x.score
-    end
-end
 
 
 function _M.get_rank(self, score, value)
     local sl = self._sl
-    local dict = self._dict
 
     local rank = 0
     local x = sl.header
-    for i = sl.level - 1, 0, -1 do
+    for i = sl.level, 1, -1 do
         local y = x.level[i]
         local z = y.forward
-        while z ~= NULL and (z.score < score or
-                (z.score == score and dict[ptr2num(z)] <= value)) do
+        while z and (z.score < score or
+                (z.score == score and z.value <= value)) do
             rank = rank + y.span
             x = z
             y = x.level[i]
             z = y.forward
         end
 
-        if dict[ptr2num(x)] == value then
+        if x.value == value then
             return rank
         end
     end
@@ -534,10 +448,10 @@ function _M.get_score_rank(self, score, ex)
 
     local rank = 0
     local x = sl.header
-    for i = sl.level - 1, 0, -1 do
+    for i = sl.level, 1, -1 do
         local y = x.level[i]
         local z = y.forward
-        while z ~= NULL and lt_ex(z.score, score, ex) do
+        while z and lt_ex(z.score, score, ex) do
             rank = rank + y.span
             x = z
             y = x.level[i]
@@ -556,12 +470,12 @@ local function is_in_range(self, minscore, minex, maxscore, maxex)
 
     local sl = self._sl
     local x = sl.tail
-    if x == NULL or lt_in(x.score, minscore, minex) then
+    if not x or lt_in(x.score, minscore, minex) then
         return false
     end
 
-    x = sl.header.level[0].forward
-    if x == NULL or lt_in(maxscore, x.score, maxex) then
+    x = sl.header.level[1].forward
+    if not x or lt_in(maxscore, x.score, maxex) then
         return false
     end
 
@@ -577,16 +491,16 @@ function _M.first_in_range(self, minscore, minex, maxscore, maxex)
 
     local sl = self._sl
     local x = sl.header
-    for i = sl.level - 1, 0, -1 do
+    for i = sl.level, 1, -1 do
         local y = x.level[i].forward
-        while y ~= NULL and lt_in(y.score, minscore, minex) do
+        while y and lt_in(y.score, minscore, minex) do
             x = y
             y = x.level[i].forward
         end
     end
 
-    -- this is an inner range, so the next node cannot be NULL
-    x = x.level[0].forward
+    -- this is an inner range, so the next node cannot be nil
+    x = x.level[1].forward
     if lt_ex(x.score, maxscore, maxex) then
         return x
     end
@@ -600,9 +514,9 @@ function _M.last_in_range(self, minscore, minex, maxscore, maxex)
 
     local sl = self._sl
     local x = sl.header
-    for i = sl.level - 1, 0, -1 do
+    for i = sl.level, 1, -1 do
         local y = x.level[i].forward
-        while y ~= NULL and lt_ex(y.score, maxscore, maxex) do
+        while y and lt_ex(y.score, maxscore, maxex) do
             x = y
             y = x.level[i].forward
         end
@@ -615,16 +529,14 @@ end
 
 
 function _M.iterate(self, cb)
-    local dict = self._dict
-
     local rank = 0
     local x = self._sl.header
 
-    x = x.level[0].forward
-    while x ~= NULL do
+    x = x.level[1].forward
+    while x do
         rank = rank + 1
-        cb(dict[ptr2num(x)], x.score, rank)
-        x = x.level[0].forward
+        cb(x, rank)
+        x = x.level[1].forward
     end
 end
 

@@ -1,7 +1,7 @@
 lua-resty-zset
 ====
 
-Lua-land sorted set based on LuaJIT FFI.
+Sorted set implementation in Lua.
 
 
 # Status

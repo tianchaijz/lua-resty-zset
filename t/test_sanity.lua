@@ -27,7 +27,7 @@ while true do
     if not score then
         break
     end
-    local value = "a" .. score
+    local value = "s" .. score
     zs:insert(score, value)
 end
 
@@ -35,7 +35,7 @@ end
 assert(total == zs:len())
 
 
-print("rank 28:", zs:get_rank("a28"))
+print("rank 28:", zs:get_rank("s28"))
 print("at rank 28:", zs:at_rank(28))
 
 
@@ -45,9 +45,7 @@ end
 
 
 print("rank [1, 10]:")
-zs:iterate_range_by_rank(1, 10, function(v)
-    print(v)
-end)
+zs:iterate_range_by_rank(1, 10, print_value)
 
 
 print("reverse rank [1, 10]:")

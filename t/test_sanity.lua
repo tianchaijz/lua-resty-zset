@@ -4,6 +4,9 @@ package.path = package.path .. ";lib/?.lua;"
 local zset = require "resty.zset"
 
 
+math.randomseed(os.time())
+
+
 local total = 100
 local all = {}
 for i = 1, total do
@@ -21,6 +24,17 @@ end
 
 
 local zs = zset.new()
+local sl = zs:sl()
+
+
+do
+    local x = sl:head_node()
+    assert(not x)
+
+    x = sl:tail_node()
+    assert(not x)
+end
+
 
 while true do
     local score = random_choose(all)
@@ -29,6 +43,44 @@ while true do
     end
     local value = "s" .. score
     zs:insert(score, value)
+end
+
+
+do
+    local x = sl:head_node()
+    assert(x.value == "s1")
+    assert(x.score == 1)
+
+    assert(not zset.prev_node(x))
+
+    x = zset.next_node(x)
+    assert(x.value == "s2")
+    assert(x.score == 2)
+
+    x = sl:tail_node()
+    assert(x.value == "s" .. total)
+    assert(x.score == total)
+
+    assert(not zset.next_node(x))
+
+    x = zset.prev_node(x)
+    assert(x.value == "s" .. (total - 1))
+    assert(x.score == total - 1)
+
+
+    print("iter first 10 nodes:")
+    x = sl:head_node()
+    for i = 1, 10 do
+        print(string.format("i=%d value=%s score=%f", i, x.value, x.score))
+        x = zset.next_node(x)
+    end
+
+    print("iter last 10 nodes:")
+    x = sl:tail_node()
+    for i = 1, 10 do
+        print(string.format("i=%d value=%s score=%f", i, x.value, x.score))
+        x = zset.prev_node(x)
+    end
 end
 
 

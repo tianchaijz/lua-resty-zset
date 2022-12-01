@@ -29,6 +29,12 @@ function _M.new(size)
 end
 
 
+-- return internal skiplist
+function _M.sl(self)
+    return self._sl
+end
+
+
 function _M.insert(self, score, value)
     local dict = self._dict
     local curscore = dict[value]
@@ -282,6 +288,10 @@ end
 function _M.dump(self)
     self._sl:iterate(print_node)
 end
+
+
+_M.next_node = skiplist.next_node
+_M.prev_node = skiplist.prev_node
 
 
 return _M

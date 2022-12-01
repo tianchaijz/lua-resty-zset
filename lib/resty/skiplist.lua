@@ -351,6 +351,26 @@ function _M.delete_range_by_score(self, minscore, minex, maxscore, maxex, cb)
 end
 
 
+function _M.head_node(self)
+    return self._sl.header.level[1].forward
+end
+
+
+function _M.tail_node(self)
+    return self._sl.tail
+end
+
+
+function _M.next_node(x)
+    return x.level[1].forward
+end
+
+
+function _M.prev_node(x)
+    return x.backward
+end
+
+
 function _M.head(self)
     local x = self._sl.header
 

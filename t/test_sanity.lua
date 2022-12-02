@@ -42,8 +42,11 @@ while true do
         break
     end
     local value = "s" .. score
+    zs:insert(score * math.random() * total, value)
+    -- update to right score
     zs:insert(score, value)
 end
+assert(zs:len() == total)
 
 
 do

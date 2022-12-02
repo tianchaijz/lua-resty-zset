@@ -37,7 +37,9 @@ zs:insert(102, "c")
 
 
 assert(zs:len() == 3)
+assert(zs:get_rank("a") == 1)
 assert(zs:get_rank("b") == 2)
+assert(zs:get_rank("c") == 3)
 assert(zs._sl:get_score_rank(3) == 0)
 assert(zs._sl:get_score_rank(102, true) == 2)
 assert(zs._sl:get_score_rank(102, false) == 3)
@@ -56,12 +58,23 @@ assert(zs:len() == 0)
 
 local total = 500000
 for i = 1, total do
-    zs:insert(i, tostring(i))
+    -- test update
+    zs:insert(i * math.random() * total, tostring(i))
+    -- update to right score
     zs:insert(i, tostring(i))
 end
+assert(zs:len() == total)
 
 
-assert(zs:len(), total)
+do
+    local v, score = zs:head()
+    assert(v == "1")
+    assert(score == 1)
+
+    v, score = zs:tail()
+    assert(v == tostring(total))
+    assert(score == total)
+end
 
 
 for _ = 1, total do
@@ -105,7 +118,7 @@ end
 for i = 1, total do
     zs:delete(tostring(i))
 end
-assert(zs:len(), 0)
+assert(zs:len() == 0)
 
 
 for i = 1, 100000 do
